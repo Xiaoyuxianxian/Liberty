@@ -424,7 +424,6 @@ function fmtDur(v){const n=Math.max(0,Math.floor(v)||0);if(n<60)return n+' 秒';
 // 把解禁时间戳转成“还剩多久”，与系统提示的时长同源
 function fmtMuteUntil(ts){const el=document.getElementById('muteSec');const d=document.getElementById('muteDate');const go=()=>{const ms=Math.max(0,Math.ceil((Number(ts)||0)-Date.now()));if(el){el.textContent=ms?fmtDur(ms/1000):'0 秒';if(ms<=0&&d){if(window.__muteTimer){clearInterval(window.__muteTimer);window.__muteTimer=null;}d.textContent='已解除';setTimeout(()=>location.reload(),500);}}};go();if(el&&!window.__muteTimer)window.__muteTimer=setInterval(go,100);return el?'…':(ms?fmtDur(ms/1000):'已解除');}const s=document.createElement('style');s.textContent='@keyframes mtick{0%{opacity:.55}100%{opacity:1}}';document.head.appendChild(s);
 
-
 function showWarn(msg){
   $('warnSub').textContent=msg;
   $('warn').classList.add('show');
@@ -793,7 +792,7 @@ function chat(a){
   const m=getMute(u);
   a.innerHTML=`
   <div class="card">
-    ${m?<span style="color:red">禁言中，剩余 <b id="muteSec" style="display:inline-block;min-width:3.4em;text-align:center;font-variant-numeric:tabular-nums;animation:mtick .1s linear infinite">${fmtMuteUntil(m)}</b> （<span id="muteDate">${formatTime(m)}</span> 解禁）</span>`:''}
+    ${m?`<span style="color:red">禁言中，剩余 <b id="muteSec" style="display:inline-block;min-width:3.4em;text-align:center;font-variant-numeric:tabular-nums;animation:mtick .1s linear infinite">${fmtMuteUntil(m)}</b> （<span id="muteDate">${formatTime(m)}</span> 解禁）</span>`:''}
     <div class="chat-box" id="chatBox">
       ${chats.map(c=>`<div class="chat-msg ${c.author===u?'me':''}"><b>${esc(c.author)}:</b> ${esc(c.text)}</div>`).join('')}
     </div>
