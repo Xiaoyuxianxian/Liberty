@@ -212,6 +212,30 @@ body.dark .contact-card{border-color:#334155}
 </div>
 
 <script>
+
+/* ===== 时间显示统一工具（patch_time 注入）===== */
+function formatTime(t){
+  const n=Number(t);
+  if(!n || isNaN(n)) return '';
+  const now=Date.now();
+  const diff=Math.floor((now-n)/1000);
+  // 未来时间（系统时间倒退/时钟误差）按绝对时间显示，不显示"负几分钟前"
+  if(diff<0){ return new Date(n).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+  if(diff<60) return '刚刚';
+  if(diff<3600) return Math.floor(diff/60)+' 分钟前';
+  if(diff<86400){
+    const d=new Date(n).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit'});
+    return diff<172800 ? '今天 '+d : '昨天 '+d;
+  }
+  return new Date(n).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function formatDate(t){
+  const n=Number(t); if(!n || isNaN(n)) return '';
+  return new Date(n).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'});
+}
+function startClock(){ if(window.__clock)return; window.__clock=setInterval(()=>{document.querySelectorAll('[data-ts]').forEach(el=>{const v=el.getAttribute('data-ts');if(v)el.textContent=formatTime(v);});},30000); }
+/* ============================================== */
+
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const showHint = msg => { $('hint').textContent=msg; $('hint').classList.add('show'); clearTimeout($('hint')._t); $('hint')._t=setTimeout(()=>$('hint').classList.remove('show'),5000) };
@@ -374,18 +398,32 @@ const curUser = () => sess ? users.find(u=>u.username===sess.username) : null;
 const isAdmin = () => !!(admin || (curUser()&&curUser().role==='admin'));
 const avatarColor = n => ['#7c3aed','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444'][(n||'').charCodeAt(0)%6];
 
-function getMute(u){const m=mutes[u];if(m&&m>Date.now())return m;if(m){delete mutes[u];save()}return 0}
+function getMute(u){
+  const m=mutes[u];
+  if(m&&m>Date.now())return m;       // 仍在禁言期内
+  if(m){delete mutes[u];save(true)}  // 过期清除并同步云端，否则 KV 下次拉回、禁言删不掉
+  return 0;
+}
 
 function incWarn(u){
   warns[u]=(warns[u]||0)+1;
   const lvl=Math.ceil(warns[u]/2);
-  const sec=[0,10,30,60,120,300,600][Math.min(lvl,6)]||600;
+  const addSec=[0,10,30,60,120,300,600][Math.min(lvl,6)]||600;
+  // 关键：在【剩余禁言时长】上叠加本次时长，而不是从当前时间重算。
+  // 这样“系统提示的禁言时长”与“顶部解禁时间”永远一致。
+  const left=Math.max(0,Math.ceil((getMute(u)-Date.now())/1000));
+  const sec=left+addSec;
   mutes[u]=Date.now()+sec*1000;
-  save();
-  pushNotif(u,`你因违规发言被禁言 ${sec} 秒（累计 ${warns[u]} 次）`,'warn');
-  addLog('warn',`用户 ${u} 违规，禁言 ${sec}s`);
+  save(true);
+  pushNotif(u,`你因违规发言被禁言 ${fmtDur(sec)}（累计 ${warns[u]} 次）`,'warn');
+  addLog('warn',`用户 ${u} 违规，禁言 ${sec}s（累计 ${warns[u]} 次）`);
   return {count:warns[u],sec};
 }
+// 时长人类可读：30s→“30 秒”，90s→“1 分 30 秒”，3700→“1 小时 1 分 40 秒”
+function fmtDur(v){const n=Math.max(0,Math.floor(v)||0);if(n<60)return n+' 秒';const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),ss=n%60;return (h?(h+' 小时'):'')+(m?(m+' 分'):'')+(ss?(' '+ss+' 秒'):'').trim()||'0 秒';}
+// 把解禁时间戳转成“还剩多久”，与系统提示的时长同源
+function fmtMuteUntil(ts){const ms=Math.max(0,Math.ceil((Number(ts)||0)-Date.now()));return ms?fmtDur(ms/1000):'已解除';}
+
 
 function showWarn(msg){
   $('warnSub').textContent=msg;
@@ -733,7 +771,7 @@ function forum(a){
       </div>
       <div class="meta">
         <span class="avatar sm" style="background:${avatarColor(p.author)};margin-right:4px">${(p.author[0]||'?').toUpperCase()}</span>
-        ${esc(p.author)} · ${new Date(p.time).toLocaleString()} · <span class="tag">${esc(p.cat)}</span> 👁${p.views} ❤️${p.likes} 💬${p.comments.length}
+        ${esc(p.author)} · <span data-ts="p.time">${formatTime(p.time)}</span> · <span class="tag">${esc(p.cat)}</span> 👁${p.views} ❤️${p.likes} 💬${p.comments.length}
         ${isFav?' ⭐':''}
       </div>
       <p style="margin-top:6px">${esc(p.body).slice(0,120)}${p.body.length>120?'…':''}</p>
@@ -755,7 +793,7 @@ function chat(a){
   const m=getMute(u);
   a.innerHTML=`
   <div class="card">
-    <h2>聊天室 ${m?'<span style="color:red">已禁言至 '+new Date(m).toLocaleTimeString()+'</span>':''}</h2>
+    <h2>聊天室 ${m?'<span style="color:red">禁言中，剩余 '+fmtMuteUntil(m)+'（'+formatTime(m)+' 解禁）</span>':''}</h2>
     <div class="chat-box" id="chatBox">
       ${chats.map(c=>`<div class="chat-msg ${c.author===u?'me':''}"><b>${esc(c.author)}:</b> ${esc(c.text)}</div>`).join('')}
     </div>
@@ -790,7 +828,7 @@ function pmThread(cur){
   list.filter(m=>m.to===me&&!m.read).forEach(m=>m.read=true); save();
   return `<h3>与 ${esc(cur)} 的对话</h3>
     <div class="chat-box" id="pmBox" style="height:280px">
-      ${list.map(m=>`<div class="chat-msg ${m.from===me?'me':''}">${esc(m.text)}<div class="muted" style="font-size:11px">${new Date(m.time).toLocaleTimeString()}</div></div>`).join('')||'<p class="muted">开始对话吧～</p>'}
+      ${list.map(m=>`<div class="chat-msg ${m.from===me?'me':''}">${esc(m.text)}<div class="muted" style="font-size:11px">${formatTime(m.time)}</div></div>`).join('')||'<p class="muted">开始对话吧～</p>'}
     </div>
     <div class="row"><input id="pmi" placeholder="输入消息"><button class="btn" onclick="sendPm('${esc(cur)}')">发送</button></div>`;
 }
@@ -800,7 +838,7 @@ function pageFavs(a){
   const ids=favs.filter(f=>f.user===cu.username).map(f=>f.postId);
   const list=posts.filter(p=>ids.includes(p.id));
   a.innerHTML=`<div class="card"><h2>⭐ 我的收藏 (${list.length})</h2>
-    ${list.length?list.map(p=>`<div class="card" style="margin-bottom:8px"><span class="post-title" onclick="openPost(${p.id})">${esc(p.title)}</span> <span class="muted">${esc(p.author)} · ${new Date(p.time).toLocaleString()}</span> <button class="ghost sm" onclick="toggleFav(${p.id})">取消收藏</button></div>`).join(''):'<p class="muted">还没有收藏</p>'}
+    ${list.length?list.map(p=>`<div class="card" style="margin-bottom:8px"><span class="post-title" onclick="openPost(${p.id})">${esc(p.title)}</span> <span class="muted">${esc(p.author)} · <span data-ts="p.time">${formatTime(p.time)}</span></span> <button class="ghost sm" onclick="toggleFav(${p.id})">取消收藏</button></div>`).join(''):'<p class="muted">还没有收藏</p>'}
   </div>`;
 }
 
@@ -816,7 +854,7 @@ function profile(a){
       <div style="flex:1">
         <h2 style="margin:0">${esc(cu.username)} ${cu.role==='admin'?'<span class="tag">管理员</span>':''}</h2>
         <p class="muted">${esc(cu.bio||'这个用户很懒，什么都没写')}</p>
-        <p class="small muted">📱 ${esc(cu.phone||'')} · ✉️ ${esc(cu.email||'')} · 📅 ${new Date(cu.time||Date.now()).toLocaleDateString()}</p>
+        <p class="small muted">📱 ${esc(cu.phone||'')} · ✉️ ${esc(cu.email||'')} · 📅 ${formatDate(cu.time||Date.now())}</p>
         <p class="small muted">📝 ${myPosts.length} 帖子 · 💬 ${myComments} 评论 · 👤 ${following} 关注</p>
       </div>
     </div>
@@ -863,7 +901,7 @@ function userPage(a){
       <div style="flex:1">
         <h2 style="margin:0">${esc(un)} ${u.role==='admin'?'<span class="tag">管理员</span>':''}</h2>
         <p class="muted">${esc(u.bio||'这个用户很懒，什么都没写')}</p>
-        <p class="small muted">📅 注册于 ${new Date(u.time||Date.now()).toLocaleDateString()} · ⚠️ 违规 ${warns[un]||0} 次</p>
+        <p class="small muted">📅 注册于 ${formatDate(u.time||Date.now())} · ⚠️ 违规 ${warns[un]||0} 次</p>
       </div>
       ${!isMe&&sess?`<button class="btn sm" onclick="toggleFollow('${esc(un)}')">${following?'✓ 已关注':'＋ 关注'}</button>`:''}
       ${!isMe&&sess?`<button class="ghost sm" onclick="sendPm('${esc(un)}')">✉️ 私信</button>`:''}
@@ -901,7 +939,7 @@ function postDetail(a){
     </div>
     <div class="meta">
       <span class="avatar sm" style="background:${avatarColor(p.author)};margin-right:4px">${(p.author[0]||'?').toUpperCase()}</span>
-      ${esc(p.author)} · ${new Date(p.time).toLocaleString()} · <span class="tag">${esc(p.cat)}</span> 👁${p.views} ❤️${p.likes} 💬${p.comments.length}
+      ${esc(p.author)} · <span data-ts="p.time">${formatTime(p.time)}</span> · <span class="tag">${esc(p.cat)}</span> 👁${p.views} ❤️${p.likes} 💬${p.comments.length}
       ${isFav?' ⭐':''}
     </div>
     <p style="margin-top:10px;white-space:pre-wrap">${esc(p.body)}</p>
@@ -923,7 +961,7 @@ function postDetail(a){
   if(!p.comments.length) html+=`<p class="muted">还没有评论，来抢沙发吧</p>`;
   p.comments.forEach((c,i)=>{
     html+=`<div class="comment" id="cm-${p.id}-${i}">
-      <b>${esc(c.author)}</b> <span class="muted small">${new Date(c.time).toLocaleString()}</span>
+      <b>${esc(c.author)}</b> <span class="muted small"><span data-ts="c.time">${formatTime(c.time)}</span></span>
       ${sess?`<button class="ghost sm" onclick="likeComment(${p.id},${i})">👍 ${c.likes||0}</button>`:''}
       ${sess?`<button class="ghost sm" onclick="showReply(${p.id},${i})">回复</button>`:''}
       ${isAdmin()||c.author===sess?.username?`<button class="btn danger sm" onclick="delComment(${p.id},${i})">删</button>`:''}
@@ -931,7 +969,7 @@ function postDetail(a){
       <span style="white-space:pre-wrap">${esc(c.text)}</span>
       <div class="sub-comment" id="replies-${p.id}-${i}">`;
     (c.replies||[]).forEach((r,j)=>{
-      html+=`<div><b>${esc(r.author)}</b> <span class="muted small">${new Date(r.time).toLocaleString()}</span>
+      html+=`<div><b>${esc(r.author)}</b> <span class="muted small"><span data-ts="r.time">${formatTime(r.time)}</span></span>
         ${isAdmin()||r.author===sess?.username?`<button class="btn danger sm" onclick="delReply(${p.id},${i},${j})">删</button>`:''}
         <span style="white-space:pre-wrap">${esc(r.text)}</span></div>`;
     });
@@ -993,7 +1031,7 @@ function adminTabBody(el){
     </div>
     <div class="card" style="box-shadow:none;border:1px solid #eee">
       <h3>📈 最近动态</h3>
-      ${logs.slice(0,8).map(l=>`<div class="log-entry">[${new Date(l.time).toLocaleString()}] <b>${esc(l.type)}</b> ${esc(l.text)}</div>`).join('')||'<p class="muted">暂无</p>'}
+      ${logs.slice(0,8).map(l=>`<div class="log-entry">[<span data-ts="l.time">${formatTime(l.time)}</span>] <b>${esc(l.type)}</b> ${esc(l.text)}</div>`).join('')||'<p class="muted">暂无</p>'}
     </div>`;
   }
   // ---- 用户管理 ----
@@ -1023,7 +1061,7 @@ function adminTabBody(el){
         <td>${esc(p.author)}</td><td>${esc(p.cat)}</td>
         <td>${p.likes}/${p.comments.length}/${p.views}</td>
         <td>${p.hidden?'<span style="color:#ef4444">已隐藏</span>':'正常'}</td>
-        <td class="small">${new Date(p.time).toLocaleString()}</td>
+        <td class="small"><span data-ts="p.time">${formatTime(p.time)}</span></td>
         <td>
           <button class="ghost sm" onclick="adminToggleTop(${p.id})">${p.top?'取消置顶':'置顶'}</button>
           <button class="ghost sm" onclick="adminAction('${p.hidden?'unhide':'hide'}',${p.id})">${p.hidden?'恢复':'隐藏'}</button>
@@ -1044,7 +1082,7 @@ function adminTabBody(el){
         <td>${esc(comment.author)}</td>
         <td>${esc(comment.text)}</td>
         <td>${hasBad(comment.text)?'<span style="color:#ef4444">是</span>':'否'}</td>
-        <td class="small">${new Date(comment.time).toLocaleString()}</td>
+        <td class="small"><span data-ts="comment.time">${formatTime(comment.time)}</span></td>
         <td><button class="btn danger sm" onclick="adminDelComment(${post.id},${idx})">删除</button></td>
       </tr>`).join('')||'<tr><td colspan="6" class="muted">暂无评论</td></tr>'}
     </tbody></table>`;
@@ -1057,7 +1095,7 @@ function adminTabBody(el){
     ${reports.slice().sort((a,b)=>b.time-a.time).map((r,i)=>`
       <tr class="${r.done?'':'report'}">
         <td>${esc(r.type)}</td><td>${esc(r.target)}</td><td>${esc(r.reporter)}</td>
-        <td>${esc(r.reason)}</td><td class="small">${new Date(r.time).toLocaleString()}</td>
+        <td>${esc(r.reason)}</td><td class="small"><span data-ts="r.time">${formatTime(r.time)}</span></td>
         <td>${r.done?'<span class="muted">已处理</span>':'<span style="color:#ef4444">待处理</span>'}</td>
         <td>${r.done?'':
           `<button class="ghost sm" onclick="adminHandleReport(${i},'dismiss')">忽略</button>
@@ -1077,7 +1115,7 @@ function adminTabBody(el){
       <tr ${hasBad(c.text)?'class="report"':''}>
         <td>${esc(c.author)}</td><td>${esc(c.text)}</td>
         <td>${hasBad(c.text)?'<span style="color:#ef4444">是</span>':'否'}</td>
-        <td class="small">${new Date(c.time||Date.now()).toLocaleString()}</td>
+        <td class="small">${formatTime(c.time||Date.now())}</td>
         <td><button class="btn danger sm" onclick="adminAction('mute',${JSON.stringify(c.author)})">禁言</button></td>
       </tr>`).join('')||'<tr><td colspan="5" class="muted">暂无消息</td></tr>'}
     </tbody></table>`;
@@ -1089,7 +1127,7 @@ function adminTabBody(el){
     ${pms.slice().reverse().slice(0,100).map((m,i)=>`
       <tr ${hasBad(m.text)?'class="report"':''}>
         <td>${esc(m.from)}</td><td>${esc(m.to)}</td><td>${esc(m.text)}</td>
-        <td class="small">${new Date(m.time).toLocaleString()}</td>
+        <td class="small"><span data-ts="m.time">${formatTime(m.time)}</span></td>
         <td><button class="btn danger sm" onclick="adminDelPm(${pms.length-1-i})">删除</button></td>
       </tr>`).join('')||'<tr><td colspan="5" class="muted">暂无私信</td></tr>'}
     </tbody></table>`;
@@ -1098,9 +1136,9 @@ function adminTabBody(el){
   else if(adminTab==='bans'){
     const banList=users.filter(u=>u.banned).map(u=>({user:u.username,until:'永久',reason:'管理员封禁'}));
     Object.keys(mutes).filter(u=>mutes[u]>Date.now()).forEach(u=>{
-      if(!banList.find(b=>b.user===u)) banList.push({user:u,until:new Date(mutes[u]).toLocaleString(),reason:'违规禁言'});
+      if(!banList.find(b=>b.user===u)) banList.push({user:u,until:'剩余 '+fmtMuteUntil(mutes[u])+'（'+formatTime(mutes[u])+'）',reason:'违规禁言'});
     });
-    el.innerHTML=`<div class="card" style="box-shadow:none;border:1px solid #eee"><h3>封禁 / 禁言名单</h3><p class="muted small">可一键解封或延长禁言。</p></div>
+    el.innerHTML=`<div class="card" style="box-shadow:none;border:1px solid #eee"><h3>封禁 / 禁言名单</h3><p class="muted small">可一键解封或延长禁言。<button class="btn danger sm" onclick="adminAction(&quot;clearAllMutes&quot;)" style="background:#f59e0b;margin-left:8px">🔓 一键清除全站禁言</button></p></div>
     <table><thead><tr><th>用户</th><th>类型</th><th>截止/原因</th><th>操作</th></tr></thead><tbody>
     ${banList.length?banList.map(b=>`
       <tr class="report">
@@ -1118,7 +1156,7 @@ function adminTabBody(el){
       <button class="btn danger sm" onclick="adminAction('clearLogs')">清空日志</button>
     </div>
     <div style="max-height:400px;overflow-y:auto">
-      ${logs.map(l=>`<div class="log-entry">[${new Date(l.time).toLocaleString()}] <b style="color:${l.type==='warn'?'#ef4444':'#7c3aed'}">${esc(l.type)}</b> ${esc(l.text)}</div>`).join('')||'<p class="muted">暂无日志</p>'}
+      ${logs.map(l=>`<div class="log-entry">[<span data-ts="l.time">${formatTime(l.time)}</span>] <b style="color:${l.type==='warn'?'#ef4444':'#7c3aed'}">${esc(l.type)}</b> ${esc(l.text)}</div>`).join('')||'<p class="muted">暂无日志</p>'}
     </div>`;
   }
   // ---- 系统设置 ----
@@ -1153,7 +1191,7 @@ function renderUserRows(list){
       <td class="small">${esc(u.email||'-')}</td>
       <td>${u.banned?'<span style="color:#ef4444">已封禁</span>':(mutes[u.username]>Date.now()?'<span style="color:#f59e0b">禁言中</span>':'正常')}</td>
       <td>${warns[u.username]||0} / ${follows.filter(f=>f.from===u.username).length}</td>
-      <td class="small">${new Date(u.time||Date.now()).toLocaleDateString()}</td>
+      <td class="small">${formatDate(u.time||Date.now())}</td>
       <td>
         ${u.username==='admin'?'':`
         <button class="ghost sm" onclick="adminAction('${u.banned?'unban':'ban'}','${esc(u.username)}')">${u.banned?'解封':'封禁'}</button>
@@ -1172,7 +1210,7 @@ window.openNotif=function(){
   $('notifList').innerHTML=notifs.filter(n=>n.user===me).map(n=>`
     <div class="card small" style="margin-bottom:6px;${n.read?'opacity:.6':''}">
       <b>${n.type==='warn'?'⚠️':'🔔'} ${esc(n.text)}</b>
-      <span class="muted"> · ${new Date(n.time).toLocaleString()}</span>
+      <span class="muted"> · <span data-ts="n.time">${formatTime(n.time)}</span></span>
     </div>`).join('')||'<p class="muted">暂无通知</p>';
   $('notifModal').classList.add('show');
   notifs.forEach(n=>{if(n.user===me)n.read=true});save();
@@ -1305,7 +1343,7 @@ window.openPost=function(id){
 
 window.addComment=function(id){
   const inp=$('cmi'),v=inp.value.trim();if(!v){showHint('评论不能为空');return}
-  if(hasBad(v)){const w=incWarn(sess.username);showWarn('不文明用语！违规'+w.count+'次，禁言'+w.sec+'秒');inp.value='';return;}
+  if(hasBad(v)){const w=incWarn(sess.username);showWarn('不文明用语！违规 '+w.count+' 次，禁言 '+fmtDur(w.sec));inp.value='';return;}
   const p=posts.find(x=>x.id===id);
   if(p){p.comments.push({author:sess.username,text:v,time:Date.now(),likes:0,replies:[]});save();render();showHint('评论成功');addLog('info',`评论: ${v.slice(0,20)}`)}
 };
@@ -1314,7 +1352,7 @@ window.likeComment=function(postId,idx){
   const p=posts.find(x=>x.id===postId);if(p){p.comments[idx].likes=(p.comments[idx].likes||0)+1;save();render()}};
 window.showReply=function(postId,idx){
   const t=prompt('回复：');if(t===null||!t.trim())return;
-  if(hasBad(t)){const w=incWarn(sess.username);showWarn('不文明用语！违规'+w.count+'次');return}
+  if(hasBad(t)){const w=incWarn(sess.username);showWarn('不文明用语！违规 '+w.count+' 次，禁言 '+fmtDur(w.sec));return;}
   const p=posts.find(x=>x.id===postId);
   p.comments[idx].replies=p.comments[idx].replies||[];
   p.comments[idx].replies.push({author:sess.username,text:t.trim(),time:Date.now()});
@@ -1336,7 +1374,7 @@ window.sendChat=function(){
   const u=sess?sess.username:'游客';
   if(getMute(u)){showHint('你已被禁言');return}
   const inp=$('ci'),v=inp.value.trim();if(!v)return;
-  if(hasBad(v)){const w=incWarn(u);showWarn('不文明用语！违规'+w.count+'次，禁言'+w.sec+'秒');inp.value='';return;}
+  if(hasBad(v)){const w=incWarn(u);showWarn('不文明用语！违规 '+w.count+' 次，禁言 '+fmtDur(w.sec));inp.value='';return;}
   chats.push({author:u,text:v,time:Date.now()});save();inp.value='';render();
 };
 
@@ -1660,6 +1698,17 @@ window.adminAction=function(act,param){
   else if(act==='clearChat'){if(!confirm('清空全部聊天记录？'))return;chats=[];addLog('warn','清空聊天室');save();showHint('已清空')}
   else if(act==='clearLogs'){if(!confirm('清空系统日志？'))return;logs=[];save();showHint('已清空')}
   else if(act==='clearReports'){reports=reports.filter(r=>!r.done);save();showHint('已清理')}
+  else if(act==='clearAllMutes'){
+    var list=Object.keys(mutes).filter(function(u){return mutes[u]>Date.now()});
+    if(!list.length){showHint('当前没有用户处于禁言中');render();return}
+    if(!confirm('⚠️ 确认解除全站 '+list.length+' 名用户的禁言？\n\n名单：'+list.join('、'))){return}
+    var cleared=[];
+    list.forEach(function(u){cleared.push(u+'（剩余 '+fmtMuteUntil(mutes[u])+'）');delete mutes[u]});
+    Object.keys(mutes).forEach(function(u){if(mutes[u]<=Date.now())delete mutes[u]}); // 顺带清理过期记录
+    cleared.forEach(function(u){pushNotif(u,'管理员已解除你的禁言，你现在可以正常发言了','info')});
+    addLog('info','一键清除全站禁言，共解除 '+cleared.length+' 人：'+cleared.join('、'));
+    save();render();showHint('已解除全站禁言 '+cleared.length+' 人');
+  }
   else if(act==='resetData'){if(!confirm('⚠️ 重置全部站点数据？此操作不可恢复！'))return;['u','p','c','w','m','f','pm','rp','cfg','fl','fv','nt','lg'].forEach(k=>localStorage.removeItem(k));addLog('warn','重置全部数据');location.reload();return}
   else if(act==='announce'){
     const t=$('annInput')?$('annInput').value.trim():'';
