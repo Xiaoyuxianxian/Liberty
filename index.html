@@ -793,7 +793,7 @@ function chat(a){
   const m=getMute(u);
   a.innerHTML=`
   <div class="card">
-    ${m?`<span style="color:red">禁言中，剩余 <b id="muteSec" style="display:inline-block;min-width:3.4em;text-align:center;font-variant-numeric:tabular-nums;animation:mtick .1s linear infinite">${fmtMuteUntil(m)}</b> （<span id="muteDate">${formatTime(m)}</span> 解禁）</span>`:''}
+    ${m?<span style="color:red">禁言中，剩余 <b id="muteSec" style="display:inline-block;min-width:3.4em;text-align:center;font-variant-numeric:tabular-nums;animation:mtick .1s linear infinite">${fmtMuteUntil(m)}</b> （<span id="muteDate">${formatTime(m)}</span> 解禁）</span>`:''}
     <div class="chat-box" id="chatBox">
       ${chats.map(c=>`<div class="chat-msg ${c.author===u?'me':''}"><b>${esc(c.author)}:</b> ${esc(c.text)}</div>`).join('')}
     </div>
