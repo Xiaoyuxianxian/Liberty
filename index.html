@@ -51,7 +51,6 @@ body.dark .chat-msg{background:#334155}
 #warn .sub{color:#000;font-size:16px;margin-top:8px;font-weight:normal;text-shadow:none;-webkit-text-stroke:0}
 @keyframes bounce{from{transform:translateY(0)}to{transform:translateY(-20px)}}
 canvas#cap,canvas#lcapCanvas,canvas#rcapCanvas,canvas#acapCanvas{background:#f3f4f6;border-radius:8px;cursor:pointer;vertical-align:middle;width:120px;height:40px;flex:0 0 auto}
-@keyframes __mt{0%{opacity:.55}100%{opacity:1}}
 .tag{display:inline-block;background:#ede9fe;color:#7c3aed;padding:2px 10px;border-radius:999px;font-size:13px;margin-right:6px;cursor:pointer}
 .tag.active{background:#7c3aed;color:#fff}
 .post-title{font-size:18px;font-weight:700;cursor:pointer;color:#111827}
@@ -195,6 +194,13 @@ body.dark .contact-card{border-color:#334155}
 .contact-card .info p{margin:0;font-size:13px;color:#475569}
 .contact-card .info a{color:#7c3aed;font-weight:600;text-decoration:none}
 
+
+/* ===== 禁言倒计时顺滑：数字单独刷新 ===== */
+.mute-timer{display:inline-flex;align-items:center;gap:8px;color:#e5484d;font-weight:700;
+  padding:9px 14px;background:#fff0f0;border:1px solid #fecaca;border-radius:11px;margin-bottom:11px;flex-wrap:wrap}
+.mute-timer .sec{display:inline-block;min-width:4.4em;text-align:center;font-variant-numeric:tabular-nums;
+  animation:mtick .1s linear infinite}
+@keyframes mtick{0%{opacity:.55}100%{opacity:1}}
 </style>
 </head>
 <body>
@@ -376,12 +382,22 @@ const isAdmin = () => !!(admin || (curUser()&&curUser().role==='admin'));
 const avatarColor = n => ['#7c3aed','#ec4899','#f59e0b','#10b981','#3b82f6','#ef4444'][(n||'').charCodeAt(0)%6];
 
 function getMute(u){const m=mutes[u];if(m&&m>Date.now())return m;if(m){delete mutes[u];save()}return 0}
-/* ===== Liberty 补丁：相对时间（东八区）===== */
-const __tz8=(()=>{const o=new Date().getTimezoneOffset()*60000;return t=>new Date(Number(t)+((8*3600*1000-o)%86400000));})();
-function fmtDur(sec){sec=Math.max(0,Math.round(sec));if(sec<60)return sec+' 秒';if(sec<3600)return Math.floor(sec/60)+' 分'+(sec%60?sec%60+' 秒':'');return Math.floor(sec/3600)+' 小时'+(Math.floor(sec%3600/60)?Math.floor(sec%3600/60)+' 分':'');}
-function relTime(ts){const diff=Math.max(0,Math.floor((Date.now()-Number(ts))/1000));if(diff<60)return'刚刚';if(diff<3600)return Math.floor(diff/60)+' 分钟前';if(diff<86400)return Math.floor(diff/3600)+' 小时前';const d=__tz8(ts);return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();}
-function clearAllMutes(){const list=Object.keys(mutes).filter(u=>mutes[u]>Date.now());if(!list.length){showHint&&showHint('当前没有禁言中的用户');return;}if(!confirm('确定解除全站 '+list.length+' 条禁言？（不解除封号）\n\n名单：'+list.join('、')))return;list.forEach(u=>delete mutes[u]);save();render();showHint&&showHint('已清除全站禁言');}
-function muteClock(m){const box=document.getElementById('muteClock');const num=document.getElementById('muteSec');const dt=document.getElementById('muteDate');if(!box)return;const tick=()=>{const left=Math.max(0,Math.ceil((m-Date.now())/1000));if(num)num.textContent=fmtDur(left);if(dt){const d=__tz8(m);dt.textContent=d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes()+' 解禁';}if(left<=0){clearInterval(window.__muteT);window.__muteT=null;box.style.display='none';setTimeout(()=>render&&render(),500);}};tick();if(!window.__muteT)window.__muteT=setInterval(tick,100);}
+
+/* ===== 禁言倒计时：数字单独刷新，归零自动解禁 ===== */
+function fmtDate(ts){const d=new Date(Number(ts));const w=n=>n<10?'0'+n:''+n;
+  return d.getFullYear()+'/'+w(d.getMonth()+1)+'/'+w(d.getDate())+' '+w(d.getHours())+':'+w(d.getMinutes());}
+function fmtMute(ts){const s=Math.max(0,Math.round((Number(ts)-Date.now())/1000));
+  return s<60?s+' 秒':s<3600?(Math.floor(s/60)+' 分'+(s%60?Math.round(s%60)+' 秒':'')):(Math.floor(s/3600)+' 小时');}
+(function(){
+  const el=document.getElementById('muteSec'),dt=document.getElementById('muteDate');
+  if(!el)return;
+  let last='';
+  const go=()=>{const u=(window.sess&&sess.username)||'';const m=getMute(u);const t=m?fmtMute(m):'';
+    if(t!==last){el.textContent=t||'0 秒';last=t;}
+    if(!m&&last!==''){clearInterval(window.__mt);window.__mt=null;const bar=el.closest('.mute-timer');
+      if(bar)bar.outerHTML='<div class="mute-timer" style="background:#ecfdf5;border-color:#a7f3d0;color:#059669">✅ 已解禁，可正常发言</div>';setTimeout(()=>location.reload(),700);}};
+  go();window.__mt=setInterval(go,100);
+})();
 
 
 function incWarn(u){
@@ -763,14 +779,14 @@ function chat(a){
   const m=getMute(u);
   a.innerHTML=`
   <div class="card">
-    <h2>聊天室${m?` <span id="muteClock" style="color:red">已禁言，剩余 <b id="muteSec" style="display:inline-block;min-width:4.4em;text-align:center;font-variant-numeric:tabular-nums;animation:__mt .1s linear infinite">${fmtDur(Math.ceil((m-Date.now())/1000))}</b> （<span id="muteDate"></span>）</span>`:''}</h2>
+    <h2>聊天室${m?' <span style="color:red">已禁言</span>':''}</h2>
+    ${m?`<div class="mute-timer">🔇 你已被禁言，剩余 <b class="sec" id="muteSec">${fmtMute(m)}</b> <span id="muteDate">（${fmtDate(m)} 解禁）</span></div>`:''}
     <div class="chat-box" id="chatBox">
       ${chats.map(c=>`<div class="chat-msg ${c.author===u?'me':''}"><b>${esc(c.author)}:</b> ${esc(c.text)}</div>`).join('')}
     </div>
     <div class="row"><input id="ci" placeholder="${m?'禁言中…':'说点什么'}" ${m?'disabled':''}><button class="btn" onclick="sendChat()">发送</button></div>
   </div>`;
   const box=$('chatBox'); if(box) box.scrollTop=box.scrollHeight;
-  if(m) muteClock(m);
 }
 
 function pm(a){
@@ -985,7 +1001,6 @@ function adminTabBody(el){
       <div class="stat"><div class="num">${posts.reduce((s,p)=>s+p.comments.length,0)}</div><div class="lbl">评论总数</div></div>
       <div class="stat"><div class="num">${pms.length}</div><div class="lbl">私信总数</div></div>
       <div class="stat"><div class="num">${Object.keys(mutes).filter(u=>mutes[u]>Date.now()).length}</div><div class="lbl">禁言中</div></div>
-      <div style="grid-column:1/-1"><button class="btn danger" onclick="clearAllMutes()">🔓 一键清除全站禁言</button><span class="meta">（只解除禁言，不解除封号）</span></div>
       <div class="stat"><div class="num">${banned}</div><div class="lbl">封禁用户</div></div>
       <div class="stat"><div class="num">${reports.filter(r=>!r.done).length}</div><div class="lbl">待处理举报</div></div>
       <div class="stat"><div class="num">${posts.filter(p=>p.hidden).length}</div><div class="lbl">已隐藏帖子</div></div>
